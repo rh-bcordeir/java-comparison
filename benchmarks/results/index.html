@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Quarkus vs Spring — Benchmark Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; margin: 0; padding: 24px 28px; background: #0b1220; color: #e2e8f0; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+  h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .sub { color: #94a3b8; font-size: 12px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, input[type=file]::file-selector-button {
+    background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  input[type=file] { color: #94a3b8; font-size: 12px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .kpi { background: linear-gradient(180deg,#1e293b,#172033); border: 1px solid #334155; border-radius: 10px; padding: 12px 14px; }
+  .kpi .label { color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .kpi .value { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+  .kpi .who { color: #38bdf8; font-size: 12px; margin-top: 2px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 14px; padding: 10px 12px; background: #111a2e; border: 1px solid #1e293b; border-radius: 8px; margin-bottom: 14px; font-size: 12px; }
+  .legend .item { display: flex; align-items: center; gap: 6px; color: #cbd5e1; }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .grid.full { grid-template-columns: 1fr; }
+  .card { background: #111a2e; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 16px; }
+  .card h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #e2e8f0; }
+  .card .desc { color: #64748b; font-size: 11px; margin-bottom: 10px; }
+  canvas { max-height: 300px; }
+  .card.tall canvas { max-height: 360px; }
+
+  /* Heatmap */
+  .heatmap { display: grid; gap: 4px; margin-top: 6px; font-size: 12px; }
+  .heatmap .hcell { padding: 10px 8px; border-radius: 4px; text-align: center; color: #0b1220; font-weight: 600; }
+  .heatmap .hlabel { background: transparent; color: #cbd5e1; text-align: left; padding: 10px 6px; font-weight: 500; }
+  .heatmap .hhead { background: transparent; color: #94a3b8; text-align: center; padding: 4px; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th { color: #94a3b8; font-weight: 600; text-align: right; padding: 8px; border-bottom: 1px solid #334155; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  thead th:first-child { text-align: left; }
+  tbody td { padding: 7px 8px; border-bottom: 1px solid #1e293b; text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td:first-child { text-align: left; font-weight: 500; }
+  tbody tr:hover { background: #172033; }
+  .best { color: #34d399; font-weight: 600; }
+
+  .err { color: #fca5a5; padding: 12px; background: #2e1517; border: 1px solid #422; border-radius: 8px; margin-bottom: 14px; }
+
+  @media (max-width: 1100px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Quarkus vs Spring — Benchmark Dashboard</h1>
+      <div class="sub" id="meta">Loading…</div>
+    </div>
+    <div class="controls">
+      <label class="sub">Scenario&nbsp;<select id="scenario"></select></label>
+      <input type="file" id="csvFile" accept=".csv" />
+    </div>
+  </header>
+
+  <div id="error"></div>
+
+  <div class="kpis" id="kpis"></div>
+  <div class="legend" id="legend"></div>
+
+  <div class="grid">
+    <div class="card"><h2>Throughput leaderboard</h2><div class="desc">Requests/sec — higher is better.</div><canvas id="rateChart"></canvas></div>
+    <div class="card"><h2>Latency percentile curve</h2><div class="desc">p50 → p95 → p99 → max (log scale). Steeper = worse tail.</div><canvas id="latencyChart"></canvas></div>
+    <div class="card"><h2>Throughput vs p99 latency</h2><div class="desc">Pareto view — bottom-right is best (high req/s, low tail).</div><canvas id="paretoChart"></canvas></div>
+    <div class="card"><h2>Startup vs peak RSS</h2><div class="desc">Bubble size = throughput. Lower-left = leanest cold start.</div><canvas id="bubbleChart"></canvas></div>
+    <div class="card tall"><h2>Normalized profile</h2><div class="desc">Each axis normalized so 1.0 = best variant on that metric.</div><canvas id="radarChart"></canvas></div>
+    <div class="card"><h2>Peak RSS</h2><div class="desc">Peak resident set size during the run (MB).</div><canvas id="rssChart"></canvas></div>
+  </div>
+
+  <div class="grid full" style="margin-top:14px;">
+    <div class="card">
+      <h2>Throughput heatmap — all scenarios</h2>
+      <div class="desc">Relative throughput within each scenario column (green = best in column).</div>
+      <div id="heatmap" class="heatmap"></div>
+    </div>
+    <div class="card">
+      <h2>Data — current scenario</h2>
+      <div class="desc">Best value in each column is highlighted.</div>
+      <table id="dataTable"></table>
+    </div>
+  </div>
+
+<script>
+const PALETTE = ['#38bdf8','#a78bfa','#34d399','#fbbf24','#f472b6','#fb7185','#60a5fa','#22d3ee','#f87171','#a3e635'];
+const charts = {};
+let colorMap = new Map();
+
+function variantKey(r) { return `${r.app} / ${r.mode}`; }
+function colorFor(v) { return colorMap.get(v) || '#94a3b8'; }
+function avg(arr, key) {
+  const vals = arr.map(r => +r[key]).filter(n => !isNaN(n));
+  return vals.length ? vals.reduce((a,b)=>a+b,0) / vals.length : 0;
+}
+function groupBy(rows, keyFn) {
+  const out = new Map();
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (!out.has(k)) out.set(k, []);
+    out.get(k).push(r);
+  }
+  return out;
+}
+function destroy(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+const gridColor = '#1e293b';
+const tickColor = '#94a3b8';
+const baseScale = (extra={}) => ({
+  ticks: { color: tickColor }, grid: { color: gridColor }, ...extra,
+});
+
+function buildSummary(rows, scenario) {
+  const filtered = rows.filter(r => r.scenario === scenario);
+  const byVariant = groupBy(filtered, variantKey);
+  return [...byVariant.entries()].map(([variant, arr]) => ({
+    variant,
+    rate: avg(arr, 'rate_per_sec'),
+    p50: avg(arr, 'p50_ms'),
+    p95: avg(arr, 'p95_ms'),
+    p99: avg(arr, 'p99_ms'),
+    avgL: avg(arr, 'avg_ms'),
+    max: avg(arr, 'max_ms'),
+    startup: avg(arr, 'startup_ms'),
+    peakRss: avg(arr, 'peak_rss_mb'),
+    failed: avg(arr, 'failed_pct'),
+    rows: arr.length,
+  }));
+}
+
+function renderKpis(summary) {
+  if (!summary.length) { document.getElementById('kpis').innerHTML = ''; return; }
+  const best = (key, lowerBetter=false) => {
+    const sorted = [...summary].sort((a,b) => lowerBetter ? a[key]-b[key] : b[key]-a[key]);
+    return sorted[0];
+  };
+  const fmt = (n, d=0) => n.toLocaleString(undefined, { maximumFractionDigits: d });
+  const cards = [
+    { label: 'Top throughput', value: fmt(best('rate').rate, 0) + ' req/s', who: best('rate').variant },
+    { label: 'Best p99 latency', value: fmt(best('p99', true).p99, 1) + ' ms', who: best('p99', true).variant },
+    { label: 'Fastest startup', value: fmt(best('startup', true).startup, 0) + ' ms', who: best('startup', true).variant },
+    { label: 'Lowest peak RSS', value: fmt(best('peakRss', true).peakRss, 0) + ' MB', who: best('peakRss', true).variant },
+  ];
+  document.getElementById('kpis').innerHTML = cards.map(c => `
+    <div class="kpi">
+      <div class="label">${c.label}</div>
+      <div class="value">${c.value}</div>
+      <div class="who">${c.who}</div>
+    </div>`).join('');
+}
+
+function renderLegend(variants) {
+  document.getElementById('legend').innerHTML = variants.map(v => `
+    <span class="item"><span class="swatch" style="background:${colorFor(v)}"></span>${v}</span>
+  `).join('');
+}
+
+function renderThroughput(summary) {
+  destroy('rateChart');
+  const sorted = [...summary].sort((a,b) => a.rate - b.rate);
+  charts.rateChart = new Chart(document.getElementById('rateChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s.variant),
+      datasets: [{ label: 'req/s', data: sorted.map(s => s.rate), backgroundColor: sorted.map(s => colorFor(s.variant)) }],
+    },
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.parsed.x.toLocaleString(undefined,{maximumFractionDigits:0})} req/s` } } },
+      scales: { x: baseScale({ beginAtZero: true }), y: baseScale() },
+    },
+  });
+}
+
+function renderLatency(summary) {
+  destroy('latencyChart');
+  const labels = ['p50','p95','p99','max'];
+  const datasets = summary.map(s => ({
+    label: s.variant,
+    data: [s.p50, s.p95, s.p99, s.max],
+    borderColor: colorFor(s.variant),
+    backgroundColor: colorFor(s.variant) + '33',
+    tension: 0.25,
+    pointRadius: 4,
+    pointHoverRadius: 6,
+  }));
+  charts.latencyChart = new Chart(document.getElementById('latencyChart'), {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+      scales: { x: baseScale(), y: baseScale({ type: 'logarithmic', title: { display: true, text: 'ms (log)', color: tickColor } }) },
+    },
+  });
+}
+
+function renderPareto(summary) {
+  destroy('paretoChart');
+  charts.paretoChart = new Chart(document.getElementById('paretoChart'), {
+    type: 'scatter',
+    data: {
+      datasets: summary.map(s => ({
+        label: s.variant,
+        data: [{ x: s.rate, y: s.p99 }],
+        backgroundColor: colorFor(s.variant),
+        borderColor: colorFor(s.variant),
+        pointRadius: 8, pointHoverRadius: 11,
+      })),
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.x.toFixed(0)} req/s · p99 ${c.parsed.y.toFixed(1)} ms` } },
+      },
+      scales: {
+        x: baseScale({ title: { display: true, text: 'Throughput (req/s)', color: tickColor }, beginAtZero: true }),
+        y: baseScale({ title: { display: true, text: 'p99 latency (ms, log)', color: tickColor }, type: 'logarithmic' }),
+      },
+    },
+  });
+}
+
+function renderBubble(summary) {
+  destroy('bubbleChart');
+  const maxRate = Math.max(...summary.map(s => s.rate)) || 1;
+  charts.bubbleChart = new Chart(document.getElementById('bubbleChart'), {
+    type: 'bubble',
+    data: {
+      datasets: summary.map(s => ({
+        label: s.variant,
+        data: [{ x: s.startup, y: s.peakRss, r: 6 + 22 * (s.rate / maxRate) }],
+        backgroundColor: colorFor(s.variant) + 'cc',
+        borderColor: colorFor(s.variant),
+      })),
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: startup ${c.parsed.x.toFixed(0)} ms · ${c.parsed.y.toFixed(0)} MB RSS · ${summary.find(s=>s.variant===c.dataset.label).rate.toFixed(0)} req/s` } },
+      },
+      scales: {
+        x: baseScale({ title: { display: true, text: 'Startup (ms)', color: tickColor }, beginAtZero: true }),
+        y: baseScale({ title: { display: true, text: 'Peak RSS (MB)', color: tickColor }, beginAtZero: true }),
+      },
+    },
+  });
+}
+
+function renderRadar(summary) {
+  destroy('radarChart');
+  // Normalize so 1.0 = best on each axis (higher = better for all axes).
+  const best = {
+    throughput: Math.max(...summary.map(s => s.rate)) || 1,
+    p99: Math.min(...summary.map(s => s.p99).filter(v => v > 0)) || 1,
+    startup: Math.min(...summary.map(s => s.startup).filter(v => v > 0)) || 1,
+    rss: Math.min(...summary.map(s => s.peakRss).filter(v => v > 0)) || 1,
+    avgLatency: Math.min(...summary.map(s => s.avgL).filter(v => v > 0)) || 1,
+  };
+  const datasets = summary.map(s => ({
+    label: s.variant,
+    data: [
+      s.rate / best.throughput,
+      best.p99 / (s.p99 || 1),
+      best.startup / (s.startup || 1),
+      best.rss / (s.peakRss || 1),
+      best.avgLatency / (s.avgL || 1),
+    ],
+    borderColor: colorFor(s.variant),
+    backgroundColor: colorFor(s.variant) + '22',
+    pointBackgroundColor: colorFor(s.variant),
+    borderWidth: 2,
+  }));
+  charts.radarChart = new Chart(document.getElementById('radarChart'), {
+    type: 'radar',
+    data: { labels: ['Throughput','p99 latency','Startup','Memory','Avg latency'], datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        r: {
+          min: 0, max: 1,
+          ticks: { color: tickColor, backdropColor: 'transparent', stepSize: 0.25 },
+          grid: { color: gridColor },
+          angleLines: { color: gridColor },
+          pointLabels: { color: '#cbd5e1', font: { size: 11 } },
+        },
+      },
+    },
+  });
+}
+
+function renderRss(summary) {
+  destroy('rssChart');
+  const sorted = [...summary].sort((a,b) => a.peakRss - b.peakRss);
+  charts.rssChart = new Chart(document.getElementById('rssChart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s.variant),
+      datasets: [{ label: 'peak RSS MB', data: sorted.map(s => s.peakRss), backgroundColor: sorted.map(s => colorFor(s.variant)) }],
+    },
+    options: {
+      indexAxis: 'y', responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { x: baseScale({ beginAtZero: true }), y: baseScale() },
+    },
+  });
+}
+
+function renderHeatmap(rows) {
+  const scenarios = [...new Set(rows.map(r => r.scenario))].sort();
+  const variants = [...new Set(rows.map(variantKey))].sort();
+  const lookup = (v, scn) => {
+    const m = rows.filter(r => variantKey(r) === v && r.scenario === scn);
+    return m.length ? avg(m, 'rate_per_sec') : null;
+  };
+  // best per column for normalization
+  const bestPerScn = Object.fromEntries(scenarios.map(scn => [scn, Math.max(...variants.map(v => lookup(v, scn) || 0))]));
+  const el = document.getElementById('heatmap');
+  el.style.gridTemplateColumns = `200px repeat(${scenarios.length}, 1fr)`;
+  let html = `<div class="hhead"></div>` + scenarios.map(s => `<div class="hhead">${s}</div>`).join('');
+  for (const v of variants) {
+    html += `<div class="hlabel">${v}</div>`;
+    for (const scn of scenarios) {
+      const val = lookup(v, scn);
+      if (val == null) { html += `<div class="hcell" style="background:#1e293b;color:#475569">—</div>`; continue; }
+      const ratio = val / (bestPerScn[scn] || 1);
+      // green at 1.0, dim toward dark slate at 0
+      const r = Math.round(30 + (52 - 30) * (1 - ratio));
+      const g = Math.round(41 + (211 - 41) * ratio);
+      const b = Math.round(59 + (153 - 59) * ratio);
+      html += `<div class="hcell" title="${val.toFixed(0)} req/s" style="background:rgb(${r},${g},${b})">${val.toLocaleString(undefined,{maximumFractionDigits:0})}</div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+function renderTable(summary) {
+  const fmtN = (n, d) => Number.isFinite(n) ? n.toLocaleString(undefined,{maximumFractionDigits:d}) : '—';
+  const cols = [
+    { key: 'rate', label: 'req/s', dec: 0, higher: true },
+    { key: 'p50', label: 'p50', dec: 2, higher: false },
+    { key: 'p95', label: 'p95', dec: 2, higher: false },
+    { key: 'p99', label: 'p99', dec: 2, higher: false },
+    { key: 'avgL', label: 'avg', dec: 2, higher: false },
+    { key: 'max', label: 'max', dec: 1, higher: false },
+    { key: 'startup', label: 'startup ms', dec: 0, higher: false },
+    { key: 'peakRss', label: 'peak MB', dec: 0, higher: false },
+    { key: 'failed', label: 'fail %', dec: 2, higher: false },
+  ];
+  const bests = {};
+  for (const c of cols) {
+    const vals = summary.map(s => s[c.key]).filter(v => Number.isFinite(v));
+    bests[c.key] = c.higher ? Math.max(...vals) : Math.min(...vals);
+  }
+  const head = '<thead><tr><th>variant</th>' + cols.map(c => `<th>${c.label}</th>`).join('') + '</tr></thead>';
+  const body = '<tbody>' + summary.map(s => {
+    return '<tr><td>' + s.variant + '</td>' + cols.map(c => {
+      const isBest = s[c.key] === bests[c.key];
+      return `<td class="${isBest ? 'best' : ''}">${fmtN(s[c.key], c.dec)}</td>`;
+    }).join('') + '</tr>';
+  }).join('') + '</tbody>';
+  document.getElementById('dataTable').innerHTML = head + body;
+}
+
+function render(rows) {
+  const scenario = document.getElementById('scenario').value;
+  const summary = buildSummary(rows, scenario);
+  document.getElementById('meta').textContent =
+    `${rows.length} CSV rows · ${summary.length} variants · scenario "${scenario}"`;
+
+  renderKpis(summary);
+  renderLegend(summary.map(s => s.variant));
+  renderThroughput(summary);
+  renderLatency(summary);
+  renderPareto(summary);
+  renderBubble(summary);
+  renderRadar(summary);
+  renderRss(summary);
+  renderTable(summary);
+}
+
+function init(rawRows) {
+  const rows = rawRows.filter(r => r.app && r.scenario);
+  if (!rows.length) {
+    document.getElementById('error').innerHTML = '<div class="err">No data rows found.</div>';
+    return;
+  }
+  document.getElementById('error').innerHTML = '';
+
+  // stable color assignment per variant (across scenario switches)
+  const variants = [...new Set(rows.map(variantKey))].sort();
+  colorMap = new Map(variants.map((v, i) => [v, PALETTE[i % PALETTE.length]]));
+
+  const scenarios = [...new Set(rows.map(r => r.scenario))].sort();
+  const sel = document.getElementById('scenario');
+  sel.innerHTML = scenarios.map(s => `<option value="${s}">${s}</option>`).join('');
+  sel.onchange = () => render(rows);
+
+  renderHeatmap(rows);
+  render(rows);
+}
+
+document.getElementById('csvFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: true, dynamicTyping: true, skipEmptyLines: true,
+    complete: (res) => init(res.data),
+  });
+});
+
+Papa.parse('summary.csv', {
+  download: true, header: true, dynamicTyping: true, skipEmptyLines: true,
+  complete: (res) => init(res.data),
+  error: () => {
+    document.getElementById('error').innerHTML =
+      '<div class="err">Couldn\'t auto-load <code>summary.csv</code> (browsers block <code>file://</code> fetch). ' +
+      'Use the <b>file picker</b> above, or serve this directory over HTTP ' +
+      '(e.g. <code>python3 -m http.server</code>).</div>';
+  },
+});
+</script>
+</body>
+</html>

@@ -10,7 +10,7 @@ export const options = {
       maxDuration: __ENV.MAX_DURATION || '120s',
     },
   },
-  summaryTrendStats: ['avg', 'p(95)', 'p(99)', 'max'],
+  summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
 };
 
 export default function () {

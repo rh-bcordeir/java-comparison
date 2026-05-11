@@ -32,6 +32,12 @@ COMBOS=(
 )
 SCENARIOS=(hello cpu memory)
 
+# CSV output — fresh each run. New schema matches what run-all.sh actually measures
+# (single run per combo; no per-second sampling -> no mean RSS / CPU columns).
+CSV="$ROOT/benchmarks/results/summary.csv"
+mkdir -p "$(dirname "$CSV")"
+echo "app,mode,scenario,reqs,duration_s,rate_per_sec,p50_ms,p95_ms,p99_ms,avg_ms,max_ms,failed_pct,startup_ms,peak_rss_mb" > "$CSV"
+
 # results table rows accumulate here
 ROWS=()
 
@@ -102,15 +108,17 @@ for combo in "${COMBOS[@]}"; do
     wait "$pid" 2>/dev/null || true
 
     # Extract metrics. Each variant runs the SAME number of iterations -> req/s reflects fairness.
-    read -r reqs duration_s rate p95 p99 < <(python3 -c "
+    read -r reqs duration_s rate p50 p95 p99 avg_l max_l failed < <(python3 -c "
 import json
 m = json.load(open('$sjson'))
 d = m['http_req_duration']['values']
 reqs = int(m['http_reqs']['values']['count'])
 rate = m['http_reqs']['values']['rate']
 duration_s = reqs / rate if rate > 0 else 0
-print(f\"{reqs} {duration_s:.2f} {rate:.0f} {d['p(95)']:.1f} {d['p(99)']:.1f}\")
+failed = m.get('http_req_failed', {}).get('values', {}).get('rate', 0) * 100
+print(f\"{reqs} {duration_s:.2f} {rate:.1f} {d['med']:.2f} {d['p(95)']:.2f} {d['p(99)']:.2f} {d['avg']:.2f} {d['max']:.2f} {failed:.2f}\")
 ")
+    echo "${app},${mode},${scn},${reqs},${duration_s},${rate},${p50},${p95},${p99},${avg_l},${max_l},${failed},${startup_ms},${peak_mb}" >> "$CSV"
     ROWS+=("| ${app} | ${mode} | ${scn} | ${reqs} | ${duration_s} | ${rate} | ${p95} | ${p99} | ${startup_ms} | ${peak_mb} |")
     printf '  ✓ %-10s %-7s %-5s  reqs=%-6s in %5ss  rate=%6s/s  p95=%6sms  p99=%6sms  startup=%4sms  rss=%4sMB\n' \
         "$app" "$mode" "$scn" "$reqs" "$duration_s" "$rate" "$p95" "$p99" "$startup_ms" "$peak_mb"
@@ -126,3 +134,5 @@ echo
 echo "| app | mode | scenario | reqs | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |"
 echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|"
 printf '%s\n' "${ROWS[@]}"
+echo
+echo "CSV written to: $CSV"

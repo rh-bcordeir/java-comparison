@@ -272,6 +272,25 @@ Spring Boot JVM startup is **~3× Quarkus JVM and ~110× Quarkus native**. Sprin
 
 ---
 
+## Visualising results
+
+A zero-build dashboard lives at [`benchmarks/results/index.html`](benchmarks/results/index.html) — single static HTML, Chart.js + PapaParse from CDN. It groups runs by `(app, mode)`, lets you pick a scenario, and renders bar charts for req/s, p50/p95/p99 latency, startup time, mean + peak RSS, CPU%, and avg-vs-max latency, plus an averaged data table.
+
+**Option 1 — just open the file** (simplest):
+
+Double-click `benchmarks/results/index.html`, then use the **Load CSV** picker on the page to point it at `benchmarks/results/summary.csv`. Browsers block `fetch()` from `file://` for security, so auto-loading the CSV doesn't work without a server — the picker is the workaround.
+
+**Option 2 — serve the directory** (auto-loads the CSV):
+
+```bash
+cd benchmarks/results && python3 -m http.server 8000
+# then open http://localhost:8000/
+```
+
+Any static server works (`npx serve`, `caddy file-server`, etc.). The page auto-adapts when new variants appear in the CSV — no rebuild needed.
+
+---
+
 ## Project layout
 
 ```
