@@ -6,7 +6,6 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.time.Duration;
 import java.util.Map;
 
 @RestController
@@ -30,9 +29,18 @@ public class SpringWebfluxController {
                 .subscribeOn(Schedulers.parallel());
     }
 
-    @GetMapping("/io")
-    public Mono<Map<String, Object>> io() {
-        Map<String, Object> body = Map.of("waited_ms", Workloads.IO_DELAY_MS);
-        return Mono.delay(Duration.ofMillis(Workloads.IO_DELAY_MS)).thenReturn(body);
+    @GetMapping("/memory")
+    public Mono<Map<String, Object>> memory() {
+        // Offload to the parallel scheduler — the fill loop blocks for several ms.
+        return Mono.fromCallable(() -> {
+            long start = System.nanoTime();
+            long checksum = Workloads.allocateAndChecksum(Workloads.MEM_BYTES);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            Map<String, Object> m = Map.of(
+                    "bytes_allocated", Workloads.MEM_BYTES,
+                    "checksum", checksum,
+                    "elapsed_ms", elapsedMs);
+            return m;
+        }).subscribeOn(Schedulers.parallel());
     }
 }

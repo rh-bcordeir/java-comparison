@@ -2,12 +2,23 @@ package com.example.benchmark.reactive;
 
 final class Workloads {
     static final int FIB_N = 35;
-    static final int IO_DELAY_MS = 50;
+    static final int MEM_BYTES = 10 * 1024 * 1024;
 
     private Workloads() {}
 
     static long fib(int n) {
         if (n < 2) return n;
         return fib(n - 1) + fib(n - 2);
+    }
+
+    /** Allocate and fill a byte[]; return a checksum so the JIT can't elide the work. */
+    static long allocateAndChecksum(int size) {
+        byte[] data = new byte[size];
+        long sum = 0;
+        for (int i = 0; i < size; i++) {
+            data[i] = (byte) (i & 0xff);
+            sum += data[i];
+        }
+        return sum;
     }
 }

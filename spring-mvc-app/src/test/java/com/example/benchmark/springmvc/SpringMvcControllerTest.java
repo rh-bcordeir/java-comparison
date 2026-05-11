@@ -33,12 +33,9 @@ class SpringMvcControllerTest {
     }
 
     @Test
-    void io() throws Exception {
-        long start = System.currentTimeMillis();
-        mvc.perform(get("/spring-mvc/io"))
+    void memory() throws Exception {
+        mvc.perform(get("/spring-mvc/memory"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.waited_ms").value(50));
-        long elapsed = System.currentTimeMillis() - start;
-        if (elapsed < 50) throw new AssertionError("io returned in " + elapsed + " ms");
+           .andExpect(jsonPath("$.bytes_allocated").value(10 * 1024 * 1024));
     }
 }

@@ -31,13 +31,10 @@ class SpringWebfluxControllerTest {
     }
 
     @Test
-    void io() {
-        long start = System.currentTimeMillis();
-        client.get().uri("/spring-webflux/io").exchange()
+    void memory() {
+        client.get().uri("/spring-webflux/memory").exchange()
               .expectStatus().isOk()
               .expectBody()
-              .jsonPath("$.waited_ms").isEqualTo(50);
-        long elapsed = System.currentTimeMillis() - start;
-        if (elapsed < 50) throw new AssertionError("io returned in " + elapsed + " ms");
+              .jsonPath("$.bytes_allocated").isEqualTo(10 * 1024 * 1024);
     }
 }

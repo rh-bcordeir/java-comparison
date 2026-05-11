@@ -26,14 +26,9 @@ class ReactiveResourceTest {
     }
 
     @Test
-    void io() {
-        long start = System.currentTimeMillis();
-        given().when().get("/reactive/io")
+    void memory() {
+        given().when().get("/reactive/memory")
                 .then().statusCode(200)
-                .body("waited_ms", equalTo(50));
-        long elapsed = System.currentTimeMillis() - start;
-        if (elapsed < 50) {
-            throw new AssertionError("io endpoint returned in " + elapsed + " ms, expected >= 50");
-        }
+                .body("bytes_allocated", equalTo(10 * 1024 * 1024));
     }
 }

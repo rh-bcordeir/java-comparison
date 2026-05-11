@@ -11,13 +11,13 @@ VUS="${VUS:-100}"
 # Same iteration count per scenario across all (app, mode) combos -> fair comparison.
 HELLO_ITERATIONS="${HELLO_ITERATIONS:-50000}"
 CPU_ITERATIONS="${CPU_ITERATIONS:-500}"
-IO_ITERATIONS="${IO_ITERATIONS:-10000}"
+MEMORY_ITERATIONS="${MEMORY_ITERATIONS:-2000}"
 
 iterations_for() {
   case "$1" in
-    hello) echo "$HELLO_ITERATIONS" ;;
-    cpu)   echo "$CPU_ITERATIONS" ;;
-    io)    echo "$IO_ITERATIONS" ;;
+    hello)  echo "$HELLO_ITERATIONS" ;;
+    cpu)    echo "$CPU_ITERATIONS" ;;
+    memory) echo "$MEMORY_ITERATIONS" ;;
   esac
 }
 
@@ -30,7 +30,7 @@ COMBOS=(
   "spring-mvc     jvm    8082 /spring-mvc"
   "spring-webflux jvm    8083 /spring-webflux"
 )
-SCENARIOS=(hello cpu io)
+SCENARIOS=(hello cpu memory)
 
 # results table rows accumulate here
 ROWS=()
@@ -118,7 +118,7 @@ print(f\"{reqs} {duration_s:.2f} {rate:.0f} {d['p(95)']:.1f} {d['p(99)']:.1f}\")
 done
 
 echo
-echo "## Results (VUs=$VUS; iterations: hello=$HELLO_ITERATIONS, cpu=$CPU_ITERATIONS, io=$IO_ITERATIONS)"
+echo "## Results (VUs=$VUS; iterations: hello=$HELLO_ITERATIONS, cpu=$CPU_ITERATIONS, memory=$MEMORY_ITERATIONS)"
 echo
 echo "Every (app × mode) variant ran the **same number of iterations** for a given scenario,"
 echo "so 'duration' and 'req/s' are directly comparable within each scenario row group."

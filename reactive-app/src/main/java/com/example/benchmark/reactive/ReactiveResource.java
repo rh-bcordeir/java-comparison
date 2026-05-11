@@ -6,7 +6,6 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
-import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -39,10 +38,18 @@ public class ReactiveResource {
     }
 
     @GET
-    @Path("/io")
-    public Uni<Map<String, Object>> io() {
-        Map<String, Object> body = Map.of("waited_ms", Workloads.IO_DELAY_MS);
-        return Uni.createFrom().item(body)
-                .onItem().delayIt().by(Duration.ofMillis(Workloads.IO_DELAY_MS));
+    @Path("/memory")
+    public Uni<Map<String, Object>> memory() {
+        // The fill loop takes several ms — offload to the worker pool to avoid blocking the event loop.
+        return Uni.createFrom().item(() -> {
+            long start = System.nanoTime();
+            long checksum = Workloads.allocateAndChecksum(Workloads.MEM_BYTES);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            Map<String, Object> m = Map.of(
+                    "bytes_allocated", Workloads.MEM_BYTES,
+                    "checksum", checksum,
+                    "elapsed_ms", elapsedMs);
+            return m;
+        }).runSubscriptionOn(CPU_POOL);
     }
 }
