@@ -25,9 +25,14 @@ public class ImperativeResource {
     }
 
     @GET
-    @Path("/io")
-    public Map<String, Object> io() throws InterruptedException {
-        Thread.sleep(Workloads.IO_DELAY_MS);
-        return Map.of("waited_ms", Workloads.IO_DELAY_MS);
+    @Path("/memory")
+    public Map<String, Object> memory() {
+        long start = System.nanoTime();
+        long checksum = Workloads.allocateAndChecksum(Workloads.MEM_BYTES);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        return Map.of(
+                "bytes_allocated", Workloads.MEM_BYTES,
+                "checksum", checksum,
+                "elapsed_ms", elapsedMs);
     }
 }
