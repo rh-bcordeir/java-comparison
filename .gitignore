@@ -31,7 +31,7 @@ Thumbs.db
 *-runner.jar
 
 # Benchmark raw outputs (keep summarized results)
-benchmarks/results/raw/
+benchmarks/results/summary.csv
 .claude
 CLAUDE.md
 IMPLEMENTATION_PLAN.md    

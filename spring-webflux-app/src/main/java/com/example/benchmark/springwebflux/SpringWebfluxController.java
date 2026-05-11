@@ -35,7 +35,7 @@ public class SpringWebfluxController {
         return Mono.fromCallable(() -> {
             long start = System.nanoTime();
             long checksum = Workloads.allocateAndChecksum(Workloads.MEM_BYTES);
-            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000; //converte para ms
             Map<String, Object> m = Map.of(
                     "bytes_allocated", Workloads.MEM_BYTES,
                     "checksum", checksum,
