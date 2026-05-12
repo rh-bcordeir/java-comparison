@@ -12,12 +12,15 @@ VUS="${VUS:-100}"
 HELLO_ITERATIONS="${HELLO_ITERATIONS:-50000}"
 CPU_ITERATIONS="${CPU_ITERATIONS:-500}"
 MEMORY_ITERATIONS="${MEMORY_ITERATIONS:-2000}"
+# Each request blocks ~200ms; with 100 VUs the theoretical ceiling is ~500 req/s.
+IO_ITERATIONS="${IO_ITERATIONS:-2000}"
 
 iterations_for() {
   case "$1" in
     hello)  echo "$HELLO_ITERATIONS" ;;
     cpu)    echo "$CPU_ITERATIONS" ;;
     memory) echo "$MEMORY_ITERATIONS" ;;
+    io)     echo "$IO_ITERATIONS" ;;
   esac
 }
 
@@ -30,7 +33,7 @@ COMBOS=(
   "spring-mvc     jvm    8082 /spring-mvc"
   "spring-webflux jvm    8083 /spring-webflux"
 )
-SCENARIOS=(hello cpu memory)
+SCENARIOS=(hello cpu memory io)
 
 # CSV output — fresh each run. New schema matches what run-all.sh actually measures
 # (single run per combo; no per-second sampling -> no mean RSS / CPU columns).
@@ -126,7 +129,7 @@ print(f\"{reqs} {duration_s:.2f} {rate:.1f} {d['med']:.2f} {d['p(95)']:.2f} {d['
 done
 
 echo
-echo "## Results (VUs=$VUS; iterations: hello=$HELLO_ITERATIONS, cpu=$CPU_ITERATIONS, memory=$MEMORY_ITERATIONS)"
+echo "## Results (VUs=$VUS; iterations: hello=$HELLO_ITERATIONS, cpu=$CPU_ITERATIONS, memory=$MEMORY_ITERATIONS, io=$IO_ITERATIONS)"
 echo
 echo "Every (app × mode) variant ran the **same number of iterations** for a given scenario,"
 echo "so 'duration' and 'req/s' are directly comparable within each scenario row group."

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.Map;
 
 @RestController
@@ -42,5 +43,11 @@ public class SpringWebfluxController {
                     "elapsed_ms", elapsedMs);
             return m;
         }).subscribeOn(Schedulers.parallel());
+    }
+
+    @GetMapping("/io")
+    public Mono<Map<String, Object>> io() {
+        return Mono.just(Map.<String, Object>of("waited_ms", 200))
+                .delayElement(Duration.ofMillis(200));
     }
 }

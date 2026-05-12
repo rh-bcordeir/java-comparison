@@ -55,10 +55,27 @@ We chose to make `native` a *build profile* on each Quarkus app instead of a thi
 - `podman` (Docker also works if you swap the runtime in the POMs)
 - `k6` (for benchmarking)
 
+### Development mode (JVM only)
+
+```bash
+cd imperative-app
+quarkus dev   # or: mvn quarkus:dev
+```
+
+`quarkus dev` runs **JVM mode only** with hot reload. Native images are AOT-compiled and cannot support live class reloading, so there is no native dev mode.
+
+### Build everything at once
+
+```bash
+./build-all.sh
+```
+
+Runs `mvn clean package -DskipTests` for every module (producing the JVM jars for all four apps) and then `mvn package -Pnative -DskipTests` for the two Quarkus apps (producing the `-runner` native binaries). This is what `benchmarks/run-all.sh` expects — use it instead of remembering which module needs which Maven invocation. Spring apps are JVM-only by design (see *Architecture* above).
+
 ### JVM mode
 
 ```bash
-# Build both apps
+# Build both apps from the project root
 mvn -DskipTests package
 
 # Run (each in its own terminal)
@@ -75,14 +92,18 @@ curl http://localhost:8081/reactive/hello
 Native build is configured to use **podman** as the container runtime (set in each app's `pom.xml`). First run pulls the Mandrel builder image (~1 GB).
 
 ```bash
-# Build both native binaries
+# Build both native binaries from the project root
 mvn -pl imperative-app -am package -Pnative -DskipTests
 mvn -pl reactive-app  -am package -Pnative -DskipTests
 
-# Run them directly
+# Run them directly (no JVM needed)
 ./imperative-app/target/imperative-app-1.0.0-SNAPSHOT-runner   # :8080
 ./reactive-app/target/reactive-app-1.0.0-SNAPSHOT-runner       # :8081
 ```
+
+> **Maven flags explained:** `-pl imperative-app` tells Maven to build only that module (instead of all modules); `-am` ("also make") ensures any modules it depends on are built first. These are convenience flags when running from the project root — the equivalent from inside the module directory is simply `mvn package -Pnative -DskipTests`.
+
+> **Why podman for native?** Podman is only used at **build time** to run the GraalVM/Mandrel compiler inside a container — the resulting binary is a standalone Linux executable that runs without any container or JVM. The container runtime is already configured in each app's `pom.xml` (`native` profile), so no extra flags are needed on the command line. If you have GraalVM installed locally with `native-image` on your PATH, override the property to skip the container: `-Dquarkus.native.container-build=false`.
 
 Native build times observed on the test host: imperative **2m 58s**, reactive **1m 55s** (subsequent builds reuse the cached Mandrel image).
 

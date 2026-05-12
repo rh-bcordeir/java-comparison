@@ -35,4 +35,11 @@ public class ImperativeResource {
                 "checksum", checksum,
                 "elapsed_ms", elapsedMs);
     }
+
+    @GET
+    @Path("/io")
+    public Map<String, Object> io() throws InterruptedException {
+        Thread.sleep(200);
+        return Map.of("waited_ms", 200);
+    }
 }
