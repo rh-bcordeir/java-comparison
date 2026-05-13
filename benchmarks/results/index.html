@@ -351,6 +351,7 @@ function renderHeatmap(rows) {
   el.innerHTML = html;
 }
 
+const tableSort = { key: null, dir: 'asc' };
 function renderTable(summary) {
   const fmtN = (n, d) => Number.isFinite(n) ? n.toLocaleString(undefined,{maximumFractionDigits:d}) : '—';
   const cols = [
@@ -369,14 +370,42 @@ function renderTable(summary) {
     const vals = summary.map(s => s[c.key]).filter(v => Number.isFinite(v));
     bests[c.key] = c.higher ? Math.max(...vals) : Math.min(...vals);
   }
-  const head = '<thead><tr><th>variant</th>' + cols.map(c => `<th>${c.label}</th>`).join('') + '</tr></thead>';
-  const body = '<tbody>' + summary.map(s => {
+  const rows = summary.slice();
+  if (tableSort.key) {
+    const dir = tableSort.dir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      const av = a[tableSort.key], bv = b[tableSort.key];
+      if (tableSort.key === 'variant') return String(av).localeCompare(String(bv)) * dir;
+      const ax = Number.isFinite(av) ? av : Infinity;
+      const bx = Number.isFinite(bv) ? bv : Infinity;
+      return (ax - bx) * dir;
+    });
+  }
+  const arrow = (k) => tableSort.key === k ? (tableSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const head = '<thead><tr>' +
+    `<th data-sort="variant" style="cursor:pointer">variant${arrow('variant')}</th>` +
+    cols.map(c => `<th data-sort="${c.key}" style="cursor:pointer">${c.label}${arrow(c.key)}</th>`).join('') +
+    '</tr></thead>';
+  const body = '<tbody>' + rows.map(s => {
     return '<tr><td>' + s.variant + '</td>' + cols.map(c => {
       const isBest = s[c.key] === bests[c.key];
       return `<td class="${isBest ? 'best' : ''}">${fmtN(s[c.key], c.dec)}</td>`;
     }).join('') + '</tr>';
   }).join('') + '</tbody>';
-  document.getElementById('dataTable').innerHTML = head + body;
+  const tbl = document.getElementById('dataTable');
+  tbl.innerHTML = head + body;
+  tbl.querySelectorAll('th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const k = th.getAttribute('data-sort');
+      if (tableSort.key === k) {
+        tableSort.dir = tableSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        tableSort.key = k;
+        tableSort.dir = (k === 'variant') ? 'asc' : 'desc';
+      }
+      renderTable(summary);
+    });
+  });
 }
 
 function render(rows) {
