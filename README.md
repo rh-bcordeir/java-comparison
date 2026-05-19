@@ -1,6 +1,6 @@
 # Quarkus vs Spring Boot Performance Benchmark
 
-Comparison of six runtime variants across three workload shapes:
+Comparison of six runtime variants across four workload shapes:
 
 | Framework | Mode | Variant |
 |---|---|---|
@@ -9,13 +9,14 @@ Comparison of six runtime variants across three workload shapes:
 | Spring Boot | Spring MVC (blocking, Tomcat) | JVM only |
 | Spring Boot | Spring WebFlux (reactive, Netty + Reactor) | JVM only |
 
-Workloads: lightweight JSON (`hello`), CPU-bound (`cpu`), simulated I/O (`io`).
+Workloads: lightweight JSON (`hello`), CPU-bound (`cpu`), allocation pressure (`memory`), and simulated I/O (`io`).
 
 | Scenario | Path | Workload |
 |---|---|---|
 | `hello` | `/{mode}/hello` | Lightweight JSON, no work |
 | `cpu` | `/{mode}/cpu` | Recursive Fibonacci(35) — pure CPU, deterministic |
 | `memory` | `/{mode}/memory` | Allocate + fill 10 MB `byte[]`, return checksum — stresses allocator and GC |
+| `io` | `/{mode}/io` | Artificial ~200 ms delay (simulates external call / DB wait) — reactive variant uses non-blocking suspension |
 
 > Each app exposes its own path prefix (`/imperative`, `/reactive`, `/spring-mvc`, `/spring-webflux`); native binaries serve the same paths as their JVM counterparts.
 
@@ -123,7 +124,7 @@ Six integration tests (3 endpoints × 2 apps), all passing.
 
 [**k6**](https://k6.io/) (preferred per CLAUDE.md). Three scenario scripts under `benchmarks/scenarios/`. Each takes the full URL via the `URL` env var so the same scripts cover both apps and both modes.
 
-### Profile (quick, iso-load mode, ~5 min total)
+### Profile (quick, iso-load mode, ~10 min total)
 
 Every variant runs the **exact same number of iterations** for a given scenario, so duration, throughput, and latencies are all directly comparable within a scenario.
 
@@ -131,10 +132,11 @@ Every variant runs the **exact same number of iterations** for a given scenario,
 |---|---|
 | Concurrent VUs | 100 |
 | Iterations — hello | 50,000 |
-| Iterations — cpu | 500 |
-| Iterations — memory | 2,000 (each = 10 MB allocation → ~20 GB total allocations per variant) |
+| Iterations — cpu | 5,000 |
+| Iterations — memory | 5,000 (each = 10 MB allocation → ~50 GB total allocations per variant) |
+| Iterations — io | 5,000 |
 | Runs per (app, mode, scenario) | 1 |
-| Total measured runs | 18 (6 variants × 3 scenarios) |
+| Total measured runs | 24 (6 variants × 4 scenarios) |
 
 The runner script `benchmarks/run-all.sh` for each (app × mode × scenario): frees the port, starts the app, waits for `/hello` to respond, captures startup time from the app log, runs k6, reads peak RSS from `/proc/<pid>/status` (`VmHWM`, kernel-tracked high-water mark), kills the app. Prints a single markdown results table at the end. No CSV, no per-run files.
 
@@ -163,34 +165,45 @@ Every cell in a given scenario row group ran the same number of iterations, so *
 
 | app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
 |---|---|---:|---:|---:|---:|---:|---:|
-| reactive | native | **1.73** | **28,914** | **9.6** | **19.4** | 14 | 96 |
-| imperative | native | 1.86 | 26,874 | 9.7 | 18.5 | **14** | 102 |
-| imperative | jvm | 2.31 | 21,611 | 13.3 | 29.0 | 668 | 296 |
-| reactive | jvm | 3.59 | 13,942 | 23.4 | 51.2 | 658 | 227 |
-| spring-webflux | jvm | 6.45 | 7,757 | 36.5 | 66.0 | 1,761 | 449 |
-| spring-mvc | jvm | 7.16 | 6,985 | 39.5 | 71.3 | 1,980 | 397 |
+| imperative | native | **1.23** | **40,516** | **6.72** | **12.80** | **13** | 102 |
+| reactive | native | 1.24 | 40,362 | 7.11 | 13.94 | 13 | **96** |
+| reactive | jvm | 2.25 | 22,258 | 14.18 | 31.81 | 680 | 261 |
+| imperative | jvm | 2.41 | 20,745 | 13.97 | 30.80 | 644 | 270 |
+| spring-mvc | jvm | 3.64 | 13,740 | 17.69 | 29.56 | 1,354 | 396 |
+| spring-webflux | jvm | 4.76 | 10,500 | 24.50 | 45.92 | 1,257 | 451 |
 
-### `/cpu` — Fibonacci(35) on the server (500 requests)
-
-| app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
-|---|---|---:|---:|---:|---:|---:|---:|
-| imperative | jvm | **3.55** | **141** | 1390 | 1634 | 583 | 149 |
-| reactive | jvm | 6.01 | 83 | **1368** | **1430** | 597 | 124 |
-| spring-webflux | jvm | 6.53 | 77 | 1681 | 1801 | 1,365 | 312 |
-| spring-mvc | jvm | 7.23 | 69 | 3193 | 3752 | 2,212 | 222 |
-| imperative | native | 7.99 | 63 | 3203 | 3935 | **17** | 103 |
-| reactive | native | 9.60 | 52 | 2621 | 2735 | 13 | **53** |
-
-### `/memory` — allocate + fill 10 MB byte[] (2,000 requests; stresses allocator & GC)
+### `/cpu` — Fibonacci(35) on the server (5,000 requests)
 
 | app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
 |---|---|---:|---:|---:|---:|---:|---:|
-| imperative | jvm | **3.38** | **591** | 400 | 539 | 577 | 3,312 |
-| spring-mvc | jvm | 4.37 | 457 | 463 | 608 | 2,143 | 3,241 |
-| reactive | jvm | 4.47 | 447 | **374** | **395** | 755 | 7,312 ⚠ |
-| spring-webflux | jvm | 6.08 | 329 | 904 | 1,094 | 1,698 | 1,769 |
-| imperative | native | 7.37 | 272 | 691 | 833 | 13 | 948 |
-| reactive | native | 9.59 | 209 | 691 | 732 | 19 | **332** |
+| imperative | jvm | **52.57** | **95** | 1679 | 1870 | 581 | 224 |
+| reactive | jvm | 53.20 | 94 | **1457** | **1573** | 578 | 200 |
+| spring-mvc | jvm | 54.81 | 91 | 1551 | 1722 | 1,731 | 332 |
+| spring-webflux | jvm | 58.54 | 85 | 1932 | 3465 | 1,502 | 383 |
+| imperative | native | 74.63 | 67 | 2822 | 3480 | **10** | 117 |
+| reactive | native | 74.71 | 67 | 2774 | 3401 | 20 | **70** |
+
+### `/memory` — allocate + fill 10 MB byte[] (5,000 requests; stresses allocator & GC)
+
+| app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
+|---|---|---:|---:|---:|---:|---:|---:|
+| imperative | jvm | **7.76** | **645** | 355.35 | 527.10 | 605 | 3,476 |
+| spring-mvc | jvm | 8.13 | 615 | **294.49** | **435.05** | 1,708 | 3,548 |
+| reactive | jvm | 8.30 | 602 | 366.93 | 522.05 | 829 | 3,352 |
+| spring-webflux | jvm | 9.04 | 553 | 422.76 | 514.32 | 1,320 | 2,699 |
+| imperative | native | 17.18 | 291 | 617.93 | 750.70 | 16 | 1,079 |
+| reactive | native | 18.00 | 278 | 682.56 | 867.25 | **11** | **889** |
+
+### `/io` — artificial ~200 ms delay (5,000 requests; measures the concurrency model)
+
+| app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
+|---|---|---:|---:|---:|---:|---:|---:|
+| reactive | native | **10.08** | **496** | **203.23** | **210.38** | 19 | **85** |
+| imperative | native | 10.08 | 496 | 205.16 | 217.33 | 19 | 118 |
+| imperative | jvm | 10.09 | 496 | 204.21 | 216.11 | 697 | 203 |
+| reactive | jvm | 10.13 | 494 | 206.96 | 221.86 | 703 | 181 |
+| spring-mvc | jvm | 10.14 | 493 | 205.54 | 241.03 | 1,738 | 288 |
+| spring-webflux | jvm | 10.18 | 491 | 208.39 | 242.26 | 1,209 | 425 |
 
 (Bold = best in column for that scenario.)
 
@@ -198,104 +211,54 @@ Every cell in a given scenario row group ran the same number of iterations, so *
 
 ## Analysis
 
-### Quarkus is significantly faster than Spring Boot on the JVM (`/hello`)
+### `/hello` — pure framework overhead
 
-JVM-to-JVM only (same playing field):
+JVM-to-JVM only: Quarkus reactive 22,258 req/s (**+62%**) and imperative 20,745 (**+51%**) against Spring MVC's 13,740; Spring WebFlux comes last at 10,500 (**−24%**). Quarkus's build-time wiring (no runtime classpath scanning) cuts per-request overhead. Reactive and imperative tie — with no real work, the execution model doesn't matter. WebFlux even loses to MVC: the per-request `Mono` chain costs more than it saves when there's no I/O to overlap.
 
-| Variant | req/s | Δ vs Spring MVC |
-|---|---:|---:|
-| Quarkus imperative | 21,611 | **+209%** |
-| Quarkus reactive | 13,942 | **+100%** |
-| Spring WebFlux | 7,757 | **+11%** |
-| Spring MVC | 6,985 | baseline |
+Native doubles the JVM (~40k vs ~21–22k req/s): the burst ends before the JIT warms up. A real advantage for short bursts, FaaS, and scale-to-zero; irrelevant for long-lived services, where the JVM catches up.
 
-Quarkus imperative JVM hits ~3× the throughput of Spring MVC. Quarkus's build-time framework optimizations (no runtime classpath scanning, AOT-resolved CDI graph, RESTEasy Reactive's compile-time routing) drastically reduce per-request overhead.
+### `/cpu` — Fibonacci(35)
 
-Note also that **Spring WebFlux barely beats Spring MVC** on `/hello` (only +11%) — Netty + Reactor is supposed to dominate lightweight requests. The WebFlux/Reactor pipeline overhead (each request becomes a `Mono` subscription chain) nearly cancels its theoretical lightweight advantage. WebFlux's design point is high-concurrency I/O fanout, not minimum per-request cost.
+With 5,000 iterations the JVM variants land nearly tied (85–95 req/s); imperative JVM leads narrowly and reactive JVM has the tightest tail (p99 1,573 ms) thanks to its dedicated pool. Native is ~30% behind — AOT lacks the profile-guided optimization the JIT applies to the hot recursive path. CPU-bound is the workload where the JIT earns back its warmup cost.
 
-### Native wins `/hello` here — JIT warmup story
+### `/memory` — allocation and GC
 
-In a 50,000-request burst, native `/hello` finishes in **1.73 s (reactive) or 1.86 s (imperative) vs Spring MVC's 7.16 s** — Quarkus reactive native is ~4× faster than Spring MVC.
+The JVM delivers ~2.2× the native throughput (645 vs 291 req/s): parallel, concurrent G1 against GraalVM native's single-threaded Serial GC. In exchange, native uses ~3–4× less memory (889–1,079 MB vs 2.7–3.5 GB) — with no `-Xmx`, G1 grows the heap freely. The JVM optimizes for throughput, native for density; both sides are tunable (`-H:+UseG1GC` on native, `-Xmx` on the JVM).
 
-The reason native beats JVM here is **JIT warmup**: at ~21–28k req/s, the run is over before HotSpot has fully tiered-up the hot paths. Native has no warmup phase. For long-lived services with hours of traffic, JVM catches up (this is well-documented across the industry, and our earlier 30-second runs showed it). For **short-burst, FaaS, scale-to-zero, or scheduled-job** workloads, the warmup time is dead time you actually pay for, and native wins.
+### `/io` — ~200 ms delay
 
-### CPU — imperative JVM dominant; native loses big
+With a fixed delay and 100 VUs the ceiling is ~500 req/s, and all six variants hit it (491–496) — the load is delay-bound, not framework-bound. Reactive's advantage (not tying up a thread per blocked request) would only show well above 100 VUs, once the blocking variants exhaust their worker pool; raise `VUS` to see it. What `/io` reveals here is resource efficiency: reactive native serves the same load with 85 MB RSS against Spring WebFlux's 425 MB.
 
-| Variant | req/s | p99 ms |
-|---|---:|---:|
-| Quarkus imperative JVM | **141** | 1634 |
-| Quarkus reactive JVM | 83 | **1430** ← tightest tail |
-| Spring WebFlux | 77 | 1801 |
-| Spring MVC | 69 | 3752 |
-| Quarkus imperative native | 63 | 3935 |
-| Quarkus reactive native | 52 | 2735 |
+### Startup & RSS
 
-Quarkus imperative JVM wins outright at 141 req/s — no worker-pool dispatch overhead, just raw blocking calls. Reactive JVM trades 41% throughput for the tightest tail latency (p99 = 1.43 s, ~12% better than imperative). **Native is 50–63% slower than imperative JVM** because the JIT's profile-guided optimization of Fibonacci's recursive hot path is absent in AOT.
+Startup: Quarkus native 13–20 ms, Quarkus JVM ~580–830 ms, Spring Boot JVM 1.2–1.7 s (~2× Quarkus JVM, ~90× Quarkus native). Peak RSS on `/hello`: native ~96–102 MB, Quarkus JVM ~260–270 MB, Spring ~400–450 MB. These numbers multiply by replica count on Kubernetes and serverless.
 
-### Memory allocation — the GC tradeoff laid bare
+### Failures
 
-| Variant | req/s | Peak RSS MB | Notes |
-|---|---:|---:|---|
-| Quarkus imperative JVM | **591** | 3,312 | G1 maxes parallelism for allocation |
-| Spring MVC | 457 | 3,241 | competitive throughput, similar RSS |
-| Quarkus reactive JVM | 447 | **7,312** ⚠ | G1 grew heap aggressively under pressure |
-| Spring WebFlux | 329 | 1,769 | Netty's allocator more constrained |
-| Quarkus imperative native | 272 | 948 | Serial GC: single-threaded, slow but compact |
-| Quarkus reactive native | 209 | **332** | smallest RSS by 5–22× |
-
-This is the most informative scenario in the suite. Two findings:
-
-**JVM is ~2–3× faster at allocation than native.** G1 (the JVM default) is parallel and concurrent. GraalVM native uses **Serial GC by default** — single-threaded mark-sweep-compact. Under heavy allocation pressure, the GC implementation dominates throughput.
-
-**Native uses dramatically less memory under the same pressure.** Quarkus reactive native peaked at 332 MB RSS while running 2,000 × 10 MB allocations; reactive JVM peaked at **7.3 GB** for the same work (G1 happily grows heap when allocation is fast and no `-Xmx` is set). That's a **22× RSS difference for identical workload**.
-
-You can tune both sides: bump native to G1 via `-Dquarkus.native.additional-build-args=-H:+UseG1GC` (production builds) to claw back native allocation throughput at the cost of RSS, or constrain JVM with `-Xmx256m` to flip the tradeoff the other way. The defaults reflect the deployment philosophy of each: JVM optimizes for throughput on a server, native for density on serverless/edge.
-
-### Startup & idle RSS: Spring's persistent overhead
-
-| Framework | Startup (ms, range) | Peak RSS on `/hello` (MB) |
-|---|---:|---:|
-| Quarkus native | **13–19** | 96–102 |
-| Quarkus JVM | 577–755 | 227–296 |
-| Spring Boot JVM | 1,365–2,212 | 397–449 |
-
-Spring Boot JVM startup is **~3× Quarkus JVM and ~110× Quarkus native**. Spring's peak RSS on `/hello` is ~1.5× Quarkus JVM and ~4× Quarkus native. For Kubernetes deployments with many replicas, or scale-to-zero serverless, these numbers compound.
+**Zero** failed requests across all 24 runs (~390,000 total requests).
 
 ### Tradeoffs summary
 
 | If you optimize for… | Pick |
 |---|---|
-| Cold-start time (FaaS, scale-to-zero) | **Quarkus native** (13–19 ms) |
-| Memory density at rest | **Quarkus reactive native** (96 MB on /hello) |
-| Memory density *under load* | **Quarkus reactive native** (332 MB even under 20 GB of allocation pressure) |
+| Cold-start (FaaS, scale-to-zero) | **Quarkus native** (13–20 ms) |
+| Memory density | **Quarkus native** (96 MB at rest, 889 MB under allocation pressure) |
 | Short-burst throughput | **Quarkus native** (no warmup tax) |
-| Allocation-heavy workloads (parsing, transforming large payloads) | **Quarkus imperative JVM** (591 req/s on /memory) |
-| CPU-bound work | **Quarkus imperative JVM** |
+| Sustained allocation & CPU throughput | **Quarkus imperative JVM** |
 | CPU tail latency | **Quarkus reactive JVM** (dedicated pool) |
-| JVM peak throughput on lightweight endpoints | **Quarkus imperative JVM** |
-| Already on Spring, blocking is fine | **Spring MVC** |
-| Already on Spring, need true backpressure / streaming | **Spring WebFlux** |
-
-### Failures
-
-**Zero** failed requests across all 18 runs (~315,000 total requests).
-
-### Tradeoffs summary
-
-| If you optimise for… | Pick |
-|---|---|
-| Cold-start time (FaaS, scale-to-zero) | **Native** (any flavour) |
-| Memory density (many replicas, k8s) | **Native** (reactive native lowest RSS) |
-| Sustained peak throughput | **JVM** (reactive for I/O-light, either for CPU) |
-| Predictable tail latency on CPU work | **Reactive JVM** (dedicated worker pool) |
-| High-concurrency I/O fanout (>>100 VUs) | **Reactive** (this benchmark didn't exercise that range, but the architecture is the established answer) |
-| Simplicity & debuggability | **Imperative JVM** |
+| JVM throughput on lightweight endpoints | **Quarkus reactive or imperative JVM** (technical tie) |
+| High-concurrency I/O fanout (>>100 VUs) | **Reactive** (not exercised in this profile, but the established architecture) |
+| Already on Spring | **Spring MVC** (blocking) or **WebFlux** (streaming / backpressure) |
 
 ---
 
 ## Visualising results
 
 A zero-build dashboard lives at [`benchmarks/results/index.html`](benchmarks/results/index.html) — single static HTML, Chart.js + PapaParse from CDN. It groups runs by `(app, mode)`, lets you pick a scenario, and renders bar charts for req/s, p50/p95/p99 latency, startup time, mean + peak RSS, CPU%, and avg-vs-max latency, plus an averaged data table.
+
+![Quarkus vs Spring benchmark dashboard](charts.png)
+
+*The dashboard shows summary cards at the top (highest throughput, best p99 latency, fastest startup, lowest peak RSS) and four charts: throughput ranking, latency percentile curve, throughput-vs-p99-latency scatter, and startup-vs-peak-RSS. The scenario selector in the top-right toggles between `hello`, `cpu`, `memory`, and `io`.*
 
 **Option 1 — just open the file** (simplest):
 
@@ -338,11 +301,11 @@ Any static server works (`npx serve`, `caddy file-server`, etc.). The page auto-
 
 ```bash
 git clone <repo> && cd java-comparison
-mvn -DskipTests package
-mvn -pl imperative-app -am package -Pnative -DskipTests
-mvn -pl reactive-app  -am package -Pnative -DskipTests
+./build-all.sh             # builds the JVM jars for all 4 apps + the Quarkus native binaries
 ./benchmarks/run-all.sh    # ~25 minutes
 cat benchmarks/results/summary.csv
 ```
+
+`build-all.sh` is the recommended way to build everything: it produces the JVM jars for all four apps and the `-runner` native binaries for the two Quarkus apps in one shot (see the *Build everything at once* section).
 
 Tweak load via env: `VUS=200 MEASURE=60s RUNS_PER_COMBO=5 ./benchmarks/run-all.sh`.
