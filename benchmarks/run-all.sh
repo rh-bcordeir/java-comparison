@@ -10,10 +10,10 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 VUS="${VUS:-100}"
 # Same iteration count per scenario across all (app, mode) combos -> fair comparison.
 HELLO_ITERATIONS="${HELLO_ITERATIONS:-50000}"
-CPU_ITERATIONS="${CPU_ITERATIONS:-500}"
-MEMORY_ITERATIONS="${MEMORY_ITERATIONS:-2000}"
+CPU_ITERATIONS="${CPU_ITERATIONS:-5000}"
+MEMORY_ITERATIONS="${MEMORY_ITERATIONS:-5000}"
 # Each request blocks ~200ms; with 100 VUs the theoretical ceiling is ~500 req/s.
-IO_ITERATIONS="${IO_ITERATIONS:-2000}"
+IO_ITERATIONS="${IO_ITERATIONS:-5000}"
 
 iterations_for() {
   case "$1" in
