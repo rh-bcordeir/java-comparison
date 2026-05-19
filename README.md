@@ -1,348 +1,352 @@
-# Quarkus vs Spring Boot Performance Benchmark
+# Benchmark de Performance: Quarkus vs Spring Boot
 
-Comparison of six runtime variants across three workload shapes:
+Comparação de seis variantes de runtime entre três formatos de carga de trabalho:
 
-| Framework | Mode | Variant |
+| Framework | Modo | Variante |
 |---|---|---|
-| Quarkus | imperative (blocking, RESTEasy Reactive) | JVM + native |
-| Quarkus | reactive (Mutiny / Vert.x event loop) | JVM + native |
-| Spring Boot | Spring MVC (blocking, Tomcat) | JVM only |
-| Spring Boot | Spring WebFlux (reactive, Netty + Reactor) | JVM only |
+| Quarkus | imperativo (blocking, RESTEasy Reactive) | JVM + nativo |
+| Quarkus | reativo (Mutiny / event loop do Vert.x) | JVM + nativo |
+| Spring Boot | Spring MVC (blocking, Tomcat) | apenas JVM |
+| Spring Boot | Spring WebFlux (reativo, Netty + Reactor) | apenas JVM |
 
-Workloads: lightweight JSON (`hello`), CPU-bound (`cpu`), simulated I/O (`io`).
+Cargas de trabalho: JSON leve (`hello`), uso intensivo de CPU (`cpu`), I/O simulado (`io`).
 
-| Scenario | Path | Workload |
+| Cenário | Caminho | Carga de trabalho |
 |---|---|---|
-| `hello` | `/{mode}/hello` | Lightweight JSON, no work |
-| `cpu` | `/{mode}/cpu` | Recursive Fibonacci(35) — pure CPU, deterministic |
-| `memory` | `/{mode}/memory` | Allocate + fill 10 MB `byte[]`, return checksum — stresses allocator and GC |
+| `hello` | `/{modo}/hello` | JSON leve, sem processamento |
+| `cpu` | `/{modo}/cpu` | Fibonacci(35) recursivo — CPU puro, determinístico |
+| `memory` | `/{modo}/memory` | Aloca + preenche um `byte[]` de 10 MB, retorna checksum — estressa o alocador e o GC |
 
-> Each app exposes its own path prefix (`/imperative`, `/reactive`, `/spring-mvc`, `/spring-webflux`); native binaries serve the same paths as their JVM counterparts.
+> Cada aplicação expõe seu próprio prefixo de caminho (`/imperative`, `/reactive`, `/spring-mvc`, `/spring-webflux`); os binários nativos servem os mesmos caminhos que suas contrapartes JVM.
 
 ---
 
-## Architecture
+## Arquitetura
 
-### Four codebases, six runtime variants
+### Quatro bases de código, seis variantes de runtime
 
-| Module | Stack | JVM port | Native binary |
+| Módulo | Stack | Porta JVM | Binário nativo |
 |---|---|---|---|
 | `imperative-app/` | Quarkus `quarkus-rest` (blocking) + Jackson + CDI | 8080 | `imperative-app-1.0.0-SNAPSHOT-runner` |
-| `reactive-app/` | Quarkus `quarkus-rest` returning `Uni<T>` + Mutiny | 8081 | `reactive-app-1.0.0-SNAPSHOT-runner` |
-| `spring-mvc-app/` | Spring Boot 3.4 + Spring MVC + embedded Tomcat | 8082 | — (JVM only) |
-| `spring-webflux-app/` | Spring Boot 3.4 + Spring WebFlux + Reactor + embedded Netty | 8083 | — (JVM only) |
+| `reactive-app/` | Quarkus `quarkus-rest` retornando `Uni<T>` + Mutiny | 8081 | `reactive-app-1.0.0-SNAPSHOT-runner` |
+| `spring-mvc-app/` | Spring Boot 3.4 + Spring MVC + Tomcat embarcado | 8082 | — (apenas JVM) |
+| `spring-webflux-app/` | Spring Boot 3.4 + Spring WebFlux + Reactor + Netty embarcado | 8083 | — (apenas JVM) |
 
-Quarkus apps run as JVM (`java -jar target/quarkus-app/quarkus-run.jar`) **or** as AOT-compiled native binaries (`-Pnative` profile, GraalVM Mandrel via container build). Spring apps run as standard fat-jars (`java -jar target/spring-*-app-1.0.0-SNAPSHOT.jar`); Spring native is possible via `spring-boot-maven-plugin`'s native goal but adds substantial build complexity, so we kept Spring JVM-only for this comparison.
+As aplicações Quarkus rodam como JVM (`java -jar target/quarkus-app/quarkus-run.jar`) **ou** como binários nativos compilados via AOT (perfil `-Pnative`, GraalVM Mandrel através de build em container). As aplicações Spring rodam como fat-jars padrão (`java -jar target/spring-*-app-1.0.0-SNAPSHOT.jar`); o nativo do Spring é possível via objetivo `native` do `spring-boot-maven-plugin`, mas adiciona complexidade substancial de build, então mantivemos o Spring apenas em JVM nesta comparação.
 
-### Why no separate `native-app/` module?
+### Por que não há um módulo `native-app/` separado?
 
-We chose to make `native` a *build profile* on each Quarkus app instead of a third source tree. The imperative-native and reactive-native binaries are byte-identical to their JVM siblings except for the AOT compilation step. Comparing JVM vs native within the same codebase is more meaningful than diverging the sources.
+Optamos por tornar `native` um *perfil de build* em cada aplicação Quarkus, em vez de uma terceira árvore de código-fonte. Os binários imperative-native e reactive-native são byte-a-byte idênticos aos seus irmãos JVM, exceto pela etapa de compilação AOT. Comparar JVM vs nativo dentro da mesma base de código é mais significativo do que divergir os fontes.
 
-### Workload equivalence (this is non-negotiable for a fair benchmark)
+### Equivalência das cargas de trabalho (inegociável para um benchmark justo)
 
-- **CPU**: identical recursive `fib(35)` across all four codebases. Returns `9227465`. Both reactive apps (Quarkus reactive and Spring WebFlux) offload to a CPU-sized worker pool — Quarkus uses a fixed `nCPU` pool, WebFlux uses `Schedulers.parallel()`. That's the correct reactive idiom for CPU-bound work.
-- **memory**: allocates a 10 MB `byte[]`, fills it byte-by-byte with `i % 256`, computes a checksum, returns `{bytes_allocated, checksum, elapsed_ms}`. The checksum is what defeats dead-code elimination — without it, escape analysis would let the JIT remove the allocation entirely. Reactive variants offload the fill loop to the worker pool (the loop is several ms of CPU + memory bandwidth — would stall the event loop). This scenario stresses allocator throughput, GC behavior, and heap growth dynamics.
-- **hello**: returns a small JSON map; no work. Pure framework overhead measurement.
+- **CPU**: `fib(35)` recursivo idêntico nas quatro bases de código. Retorna `9227465`. Ambas as aplicações reativas (Quarkus reativo e Spring WebFlux) delegam o trabalho a um pool de workers dimensionado para CPU — o Quarkus usa um pool fixo de `nCPU`, o WebFlux usa `Schedulers.parallel()`. Esse é o idioma reativo correto para trabalho CPU-bound.
+- **memory**: aloca um `byte[]` de 10 MB, preenche byte a byte com `i % 256`, calcula um checksum e retorna `{bytes_allocated, checksum, elapsed_ms}`. O checksum é o que impede a eliminação de código morto — sem ele, a análise de escape permitiria que o JIT removesse a alocação inteira. As variantes reativas delegam o laço de preenchimento ao pool de workers (o laço consome vários ms de CPU + largura de banda de memória — travaria o event loop). Esse cenário estressa a vazão do alocador, o comportamento do GC e a dinâmica de crescimento do heap.
+- **hello**: retorna um pequeno mapa JSON; sem processamento. Medição pura do overhead do framework.
 
 ---
 
-## Build & Run
+## Build & Execução
 
-### Prerequisites
+### Pré-requisitos
 
 - Java 21
 - Maven 3.9+
-- `podman` (Docker also works if you swap the runtime in the POMs)
-- `k6` (for benchmarking)
+- `podman` (Docker também funciona se você trocar o runtime nos POMs)
+- `k6` (para benchmarking)
 
-### Development mode (JVM only)
+### Modo de desenvolvimento (apenas JVM)
 
 ```bash
 cd imperative-app
-quarkus dev   # or: mvn quarkus:dev
+quarkus dev   # ou: mvn quarkus:dev
 ```
 
-`quarkus dev` runs **JVM mode only** with hot reload. Native images are AOT-compiled and cannot support live class reloading, so there is no native dev mode.
+`quarkus dev` roda **apenas em modo JVM** com hot reload. Imagens nativas são compiladas via AOT e não suportam recarga de classes em tempo de execução, portanto não há modo dev nativo.
 
-### Build everything at once
+### Build de tudo de uma vez
 
 ```bash
 ./build-all.sh
 ```
 
-Runs `mvn clean package -DskipTests` for every module (producing the JVM jars for all four apps) and then `mvn package -Pnative -DskipTests` for the two Quarkus apps (producing the `-runner` native binaries). This is what `benchmarks/run-all.sh` expects — use it instead of remembering which module needs which Maven invocation. Spring apps are JVM-only by design (see *Architecture* above).
+Executa `mvn clean package -DskipTests` para cada módulo (produzindo os jars JVM das quatro aplicações) e depois `mvn package -Pnative -DskipTests` para as duas aplicações Quarkus (produzindo os binários nativos `-runner`). É isso que o `benchmarks/run-all.sh` espera — use-o em vez de lembrar qual módulo precisa de qual invocação Maven. As aplicações Spring são apenas JVM por design (veja *Arquitetura* acima).
 
-### JVM mode
+### Modo JVM
 
 ```bash
-# Build both apps from the project root
+# Compile ambas as aplicações a partir da raiz do projeto
 mvn -DskipTests package
 
-# Run (each in its own terminal)
+# Execute (cada uma em seu próprio terminal)
 java -jar imperative-app/target/quarkus-app/quarkus-run.jar   # :8080
 java -jar reactive-app/target/quarkus-app/quarkus-run.jar     # :8081
 
-# Hit them
+# Faça as requisições
 curl http://localhost:8080/imperative/hello
 curl http://localhost:8081/reactive/hello
 ```
 
-### Native mode
+### Modo nativo
 
-Native build is configured to use **podman** as the container runtime (set in each app's `pom.xml`). First run pulls the Mandrel builder image (~1 GB).
+O build nativo está configurado para usar **podman** como runtime de container (definido no `pom.xml` de cada aplicação). A primeira execução baixa a imagem builder do Mandrel (~1 GB).
 
 ```bash
-# Build both native binaries from the project root
+# Compile ambos os binários nativos a partir da raiz do projeto
 mvn -pl imperative-app -am package -Pnative -DskipTests
 mvn -pl reactive-app  -am package -Pnative -DskipTests
 
-# Run them directly (no JVM needed)
+# Execute-os diretamente (sem necessidade de JVM)
 ./imperative-app/target/imperative-app-1.0.0-SNAPSHOT-runner   # :8080
 ./reactive-app/target/reactive-app-1.0.0-SNAPSHOT-runner       # :8081
 ```
 
-> **Maven flags explained:** `-pl imperative-app` tells Maven to build only that module (instead of all modules); `-am` ("also make") ensures any modules it depends on are built first. These are convenience flags when running from the project root — the equivalent from inside the module directory is simply `mvn package -Pnative -DskipTests`.
+> **Flags do Maven explicadas:** `-pl imperative-app` diz ao Maven para compilar apenas aquele módulo (em vez de todos os módulos); `-am` ("also make") garante que quaisquer módulos dos quais ele depende sejam compilados antes. Essas são flags de conveniência ao executar a partir da raiz do projeto — o equivalente de dentro do diretório do módulo é simplesmente `mvn package -Pnative -DskipTests`.
 
-> **Why podman for native?** Podman is only used at **build time** to run the GraalVM/Mandrel compiler inside a container — the resulting binary is a standalone Linux executable that runs without any container or JVM. The container runtime is already configured in each app's `pom.xml` (`native` profile), so no extra flags are needed on the command line. If you have GraalVM installed locally with `native-image` on your PATH, override the property to skip the container: `-Dquarkus.native.container-build=false`.
+> **Por que podman para o nativo?** O Podman é usado apenas em **tempo de build** para rodar o compilador GraalVM/Mandrel dentro de um container — o binário resultante é um executável Linux standalone que roda sem qualquer container ou JVM. O runtime de container já está configurado no `pom.xml` de cada aplicação (perfil `native`), portanto nenhuma flag extra é necessária na linha de comando. Se você tiver o GraalVM instalado localmente com `native-image` no seu PATH, sobrescreva a propriedade para pular o container: `-Dquarkus.native.container-build=false`.
 
-Native build times observed on the test host: imperative **2m 58s**, reactive **1m 55s** (subsequent builds reuse the cached Mandrel image).
+Tempos de build nativo observados na máquina de teste: imperativo **2m 58s**, reativo **1m 55s** (builds subsequentes reutilizam a imagem Mandrel em cache).
 
-### Tests
+### Testes
 
 ```bash
-mvn test            # both modules; QuarkusTest brings up an in-VM server
+mvn test            # ambos os módulos; o QuarkusTest sobe um servidor in-VM
 ```
 
-Six integration tests (3 endpoints × 2 apps), all passing.
+Seis testes de integração (3 endpoints × 2 aplicações), todos passando.
 
 ---
 
-## Benchmark methodology
+## Metodologia do benchmark
 
-### Tool
+### Ferramenta
 
-[**k6**](https://k6.io/) (preferred per CLAUDE.md). Three scenario scripts under `benchmarks/scenarios/`. Each takes the full URL via the `URL` env var so the same scripts cover both apps and both modes.
+[**k6**](https://k6.io/) (preferida conforme CLAUDE.md). Três scripts de cenário em `benchmarks/scenarios/`. Cada um recebe a URL completa pela variável de ambiente `URL`, de modo que os mesmos scripts cobrem ambas as aplicações e ambos os modos.
 
-### Profile (quick, iso-load mode, ~5 min total)
+### Perfil (rápido, modo de carga isolada, ~5 min no total)
 
-Every variant runs the **exact same number of iterations** for a given scenario, so duration, throughput, and latencies are all directly comparable within a scenario.
+Toda variante executa o **mesmo número exato de iterações** para um determinado cenário, então duração, vazão e latências são todas diretamente comparáveis dentro de um cenário.
 
-| Setting | Value |
+| Configuração | Valor |
 |---|---|
-| Concurrent VUs | 100 |
-| Iterations — hello | 50,000 |
-| Iterations — cpu | 500 |
-| Iterations — memory | 2,000 (each = 10 MB allocation → ~20 GB total allocations per variant) |
-| Runs per (app, mode, scenario) | 1 |
-| Total measured runs | 18 (6 variants × 3 scenarios) |
+| VUs concorrentes | 100 |
+| Iterações — hello | 50.000 |
+| Iterações — cpu | 500 |
+| Iterações — memory | 2.000 (cada = alocação de 10 MB → ~20 GB de alocações totais por variante) |
+| Execuções por (app, modo, cenário) | 1 |
+| Total de execuções medidas | 18 (6 variantes × 3 cenários) |
 
-The runner script `benchmarks/run-all.sh` for each (app × mode × scenario): frees the port, starts the app, waits for `/hello` to respond, captures startup time from the app log, runs k6, reads peak RSS from `/proc/<pid>/status` (`VmHWM`, kernel-tracked high-water mark), kills the app. Prints a single markdown results table at the end. No CSV, no per-run files.
+O script orquestrador `benchmarks/run-all.sh`, para cada (app × modo × cenário): libera a porta, inicia a aplicação, aguarda `/hello` responder, captura o tempo de startup a partir do log da aplicação, executa o k6, lê o pico de RSS de `/proc/<pid>/status` (`VmHWM`, marca d'água registrada pelo kernel) e encerra a aplicação. Imprime uma única tabela markdown de resultados ao final. Sem CSV, sem arquivos por execução.
 
 ```bash
 ./benchmarks/run-all.sh
-# Optional override:
+# Sobrescrita opcional:
 # VUS=200 HELLO_ITERATIONS=200000 CPU_ITERATIONS=2000 MEMORY_ITERATIONS=5000 ./benchmarks/run-all.sh
 ```
 
-> **Trade-off**: this is a single-sample, short-burst comparison. JIT warmup is not amortised — that's a real property of short workloads, not a flaw, but it means the JVM numbers here are not its long-running steady-state peak.
+> **Trade-off**: esta é uma comparação de amostra única e rajada curta. O warmup do JIT não é amortizado — essa é uma propriedade real de cargas de trabalho curtas, não uma falha, mas significa que os números da JVM aqui não representam seu pico em regime permanente de longa duração.
 
-### Test host & host caveats
+### Máquina de teste & ressalvas do host
 
-- Host: Linux 6.19, x86_64, 8 cores (CPU% values >100% reflect multi-core utilisation)
+- Host: Linux 6.19, x86_64, 8 núcleos (valores de CPU% >100% refletem utilização multi-core)
 - Java 21 (OpenJDK), Quarkus 3.17.5, Mandrel via `quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-21`
-- **Single-host benchmarking**: k6 and the SUT share CPU. Numbers are *comparative within this run*, not absolute headlines.
-- No JVM tuning — defaults only. Heap is unbounded, GC is the default G1.
+- **Benchmarking em host único**: o k6 e o SUT compartilham CPU. Os números são *comparativos dentro desta execução*, não manchetes absolutas.
+- Sem tuning de JVM — apenas os padrões. O heap é ilimitado, o GC é o G1 padrão.
 
 ---
 
-## Results
+## Resultados
 
-Every cell in a given scenario row group ran the same number of iterations, so **duration and req/s are apples-to-apples within each scenario**. Single sample per cell.
+Cada célula em um dado grupo de linhas de cenário executou o mesmo número de iterações, então **duração e req/s são comparáveis maçã-com-maçã dentro de cada cenário**. Amostra única por célula.
 
-### `/hello` — lightweight JSON (50,000 requests, framework overhead measurement)
+### `/hello` — JSON leve (50.000 requisições, medição do overhead do framework)
 
-| app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
+| app | modo | duração s | req/s | p95 ms | p99 ms | startup ms | pico RSS MB |
 |---|---|---:|---:|---:|---:|---:|---:|
-| reactive | native | **1.73** | **28,914** | **9.6** | **19.4** | 14 | 96 |
-| imperative | native | 1.86 | 26,874 | 9.7 | 18.5 | **14** | 102 |
-| imperative | jvm | 2.31 | 21,611 | 13.3 | 29.0 | 668 | 296 |
-| reactive | jvm | 3.59 | 13,942 | 23.4 | 51.2 | 658 | 227 |
-| spring-webflux | jvm | 6.45 | 7,757 | 36.5 | 66.0 | 1,761 | 449 |
-| spring-mvc | jvm | 7.16 | 6,985 | 39.5 | 71.3 | 1,980 | 397 |
+| reactive | native | **1.73** | **28.914** | **9.6** | **19.4** | 14 | 96 |
+| imperative | native | 1.86 | 26.874 | 9.7 | 18.5 | **14** | 102 |
+| imperative | jvm | 2.31 | 21.611 | 13.3 | 29.0 | 668 | 296 |
+| reactive | jvm | 3.59 | 13.942 | 23.4 | 51.2 | 658 | 227 |
+| spring-webflux | jvm | 6.45 | 7.757 | 36.5 | 66.0 | 1.761 | 449 |
+| spring-mvc | jvm | 7.16 | 6.985 | 39.5 | 71.3 | 1.980 | 397 |
 
-### `/cpu` — Fibonacci(35) on the server (500 requests)
+### `/cpu` — Fibonacci(35) no servidor (500 requisições)
 
-| app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
+| app | modo | duração s | req/s | p95 ms | p99 ms | startup ms | pico RSS MB |
 |---|---|---:|---:|---:|---:|---:|---:|
 | imperative | jvm | **3.55** | **141** | 1390 | 1634 | 583 | 149 |
 | reactive | jvm | 6.01 | 83 | **1368** | **1430** | 597 | 124 |
-| spring-webflux | jvm | 6.53 | 77 | 1681 | 1801 | 1,365 | 312 |
-| spring-mvc | jvm | 7.23 | 69 | 3193 | 3752 | 2,212 | 222 |
+| spring-webflux | jvm | 6.53 | 77 | 1681 | 1801 | 1.365 | 312 |
+| spring-mvc | jvm | 7.23 | 69 | 3193 | 3752 | 2.212 | 222 |
 | imperative | native | 7.99 | 63 | 3203 | 3935 | **17** | 103 |
 | reactive | native | 9.60 | 52 | 2621 | 2735 | 13 | **53** |
 
-### `/memory` — allocate + fill 10 MB byte[] (2,000 requests; stresses allocator & GC)
+### `/memory` — aloca + preenche um byte[] de 10 MB (2.000 requisições; estressa alocador & GC)
 
-| app | mode | duration s | req/s | p95 ms | p99 ms | startup ms | peak RSS MB |
+| app | modo | duração s | req/s | p95 ms | p99 ms | startup ms | pico RSS MB |
 |---|---|---:|---:|---:|---:|---:|---:|
-| imperative | jvm | **3.38** | **591** | 400 | 539 | 577 | 3,312 |
-| spring-mvc | jvm | 4.37 | 457 | 463 | 608 | 2,143 | 3,241 |
-| reactive | jvm | 4.47 | 447 | **374** | **395** | 755 | 7,312 ⚠ |
-| spring-webflux | jvm | 6.08 | 329 | 904 | 1,094 | 1,698 | 1,769 |
+| imperative | jvm | **3.38** | **591** | 400 | 539 | 577 | 3.312 |
+| spring-mvc | jvm | 4.37 | 457 | 463 | 608 | 2.143 | 3.241 |
+| reactive | jvm | 4.47 | 447 | **374** | **395** | 755 | 7.312 ⚠ |
+| spring-webflux | jvm | 6.08 | 329 | 904 | 1.094 | 1.698 | 1.769 |
 | imperative | native | 7.37 | 272 | 691 | 833 | 13 | 948 |
 | reactive | native | 9.59 | 209 | 691 | 732 | 19 | **332** |
 
-(Bold = best in column for that scenario.)
+(Negrito = melhor da coluna para aquele cenário.)
 
 ---
 
-## Analysis
+## Análise
 
-### Quarkus is significantly faster than Spring Boot on the JVM (`/hello`)
+### O Quarkus é significativamente mais rápido que o Spring Boot na JVM (`/hello`)
 
-JVM-to-JVM only (same playing field):
+Apenas JVM-contra-JVM (mesmas condições):
 
-| Variant | req/s | Δ vs Spring MVC |
+| Variante | req/s | Δ vs Spring MVC |
 |---|---:|---:|
-| Quarkus imperative | 21,611 | **+209%** |
-| Quarkus reactive | 13,942 | **+100%** |
-| Spring WebFlux | 7,757 | **+11%** |
-| Spring MVC | 6,985 | baseline |
+| Quarkus imperativo | 21.611 | **+209%** |
+| Quarkus reativo | 13.942 | **+100%** |
+| Spring WebFlux | 7.757 | **+11%** |
+| Spring MVC | 6.985 | linha de base |
 
-Quarkus imperative JVM hits ~3× the throughput of Spring MVC. Quarkus's build-time framework optimizations (no runtime classpath scanning, AOT-resolved CDI graph, RESTEasy Reactive's compile-time routing) drastically reduce per-request overhead.
+O Quarkus imperativo em JVM atinge ~3× a vazão do Spring MVC. As otimizações de framework em tempo de build do Quarkus (sem varredura de classpath em runtime, grafo CDI resolvido via AOT, roteamento em tempo de compilação do RESTEasy Reactive) reduzem drasticamente o overhead por requisição.
 
-Note also that **Spring WebFlux barely beats Spring MVC** on `/hello` (only +11%) — Netty + Reactor is supposed to dominate lightweight requests. The WebFlux/Reactor pipeline overhead (each request becomes a `Mono` subscription chain) nearly cancels its theoretical lightweight advantage. WebFlux's design point is high-concurrency I/O fanout, not minimum per-request cost.
+Note também que **o Spring WebFlux mal supera o Spring MVC** no `/hello` (apenas +11%) — Netty + Reactor deveria dominar requisições leves. O overhead do pipeline WebFlux/Reactor (cada requisição vira uma cadeia de assinatura `Mono`) quase anula sua vantagem teórica em cenários leves. O ponto de design do WebFlux é fanout de I/O de alta concorrência, não custo mínimo por requisição.
 
-### Native wins `/hello` here — JIT warmup story
+### O nativo vence o `/hello` aqui — a história do warmup do JIT
 
-In a 50,000-request burst, native `/hello` finishes in **1.73 s (reactive) or 1.86 s (imperative) vs Spring MVC's 7.16 s** — Quarkus reactive native is ~4× faster than Spring MVC.
+Em uma rajada de 50.000 requisições, o `/hello` nativo termina em **1.73 s (reativo) ou 1.86 s (imperativo) vs 7.16 s do Spring MVC** — o Quarkus reativo nativo é ~4× mais rápido que o Spring MVC.
 
-The reason native beats JVM here is **JIT warmup**: at ~21–28k req/s, the run is over before HotSpot has fully tiered-up the hot paths. Native has no warmup phase. For long-lived services with hours of traffic, JVM catches up (this is well-documented across the industry, and our earlier 30-second runs showed it). For **short-burst, FaaS, scale-to-zero, or scheduled-job** workloads, the warmup time is dead time you actually pay for, and native wins.
+A razão pela qual o nativo vence a JVM aqui é o **warmup do JIT**: a ~21–28k req/s, a execução termina antes de o HotSpot ter promovido completamente os caminhos quentes (tiered-up). O nativo não tem fase de warmup. Para serviços de longa duração com horas de tráfego, a JVM se equipara (isso é bem documentado em toda a indústria, e nossas execuções anteriores de 30 segundos mostraram isso). Para cargas de trabalho de **rajada curta, FaaS, scale-to-zero ou jobs agendados**, o tempo de warmup é tempo morto que você efetivamente paga, e o nativo vence.
 
-### CPU — imperative JVM dominant; native loses big
+### CPU — imperativo JVM dominante; nativo perde feio
 
-| Variant | req/s | p99 ms |
+| Variante | req/s | p99 ms |
 |---|---:|---:|
-| Quarkus imperative JVM | **141** | 1634 |
-| Quarkus reactive JVM | 83 | **1430** ← tightest tail |
+| Quarkus imperativo JVM | **141** | 1634 |
+| Quarkus reativo JVM | 83 | **1430** ← cauda mais apertada |
 | Spring WebFlux | 77 | 1801 |
 | Spring MVC | 69 | 3752 |
-| Quarkus imperative native | 63 | 3935 |
-| Quarkus reactive native | 52 | 2735 |
+| Quarkus imperativo nativo | 63 | 3935 |
+| Quarkus reativo nativo | 52 | 2735 |
 
-Quarkus imperative JVM wins outright at 141 req/s — no worker-pool dispatch overhead, just raw blocking calls. Reactive JVM trades 41% throughput for the tightest tail latency (p99 = 1.43 s, ~12% better than imperative). **Native is 50–63% slower than imperative JVM** because the JIT's profile-guided optimization of Fibonacci's recursive hot path is absent in AOT.
+O Quarkus imperativo JVM vence com folga a 141 req/s — sem overhead de dispatch para pool de workers, apenas chamadas blocantes puras. O reativo JVM troca 41% de vazão pela cauda de latência mais apertada (p99 = 1.43 s, ~12% melhor que o imperativo). **O nativo é 50–63% mais lento que o imperativo JVM** porque a otimização guiada por perfil do JIT sobre o caminho quente recursivo do Fibonacci está ausente no AOT.
 
-### Memory allocation — the GC tradeoff laid bare
+### Alocação de memória — o trade-off do GC exposto
 
-| Variant | req/s | Peak RSS MB | Notes |
+| Variante | req/s | Pico RSS MB | Observações |
 |---|---:|---:|---|
-| Quarkus imperative JVM | **591** | 3,312 | G1 maxes parallelism for allocation |
-| Spring MVC | 457 | 3,241 | competitive throughput, similar RSS |
-| Quarkus reactive JVM | 447 | **7,312** ⚠ | G1 grew heap aggressively under pressure |
-| Spring WebFlux | 329 | 1,769 | Netty's allocator more constrained |
-| Quarkus imperative native | 272 | 948 | Serial GC: single-threaded, slow but compact |
-| Quarkus reactive native | 209 | **332** | smallest RSS by 5–22× |
+| Quarkus imperativo JVM | **591** | 3.312 | G1 maximiza o paralelismo na alocação |
+| Spring MVC | 457 | 3.241 | vazão competitiva, RSS similar |
+| Quarkus reativo JVM | 447 | **7.312** ⚠ | G1 cresceu o heap agressivamente sob pressão |
+| Spring WebFlux | 329 | 1.769 | alocador do Netty mais restrito |
+| Quarkus imperativo nativo | 272 | 948 | Serial GC: single-threaded, lento mas compacto |
+| Quarkus reativo nativo | 209 | **332** | menor RSS por 5–22× |
 
-This is the most informative scenario in the suite. Two findings:
+Este é o cenário mais informativo do conjunto. Dois achados:
 
-**JVM is ~2–3× faster at allocation than native.** G1 (the JVM default) is parallel and concurrent. GraalVM native uses **Serial GC by default** — single-threaded mark-sweep-compact. Under heavy allocation pressure, the GC implementation dominates throughput.
+**A JVM é ~2–3× mais rápida na alocação que o nativo.** O G1 (padrão da JVM) é paralelo e concorrente. O GraalVM nativo usa **Serial GC por padrão** — mark-sweep-compact single-threaded. Sob forte pressão de alocação, a implementação do GC domina a vazão.
 
-**Native uses dramatically less memory under the same pressure.** Quarkus reactive native peaked at 332 MB RSS while running 2,000 × 10 MB allocations; reactive JVM peaked at **7.3 GB** for the same work (G1 happily grows heap when allocation is fast and no `-Xmx` is set). That's a **22× RSS difference for identical workload**.
+**O nativo usa drasticamente menos memória sob a mesma pressão.** O Quarkus reativo nativo atingiu pico de 332 MB de RSS enquanto rodava 2.000 × alocações de 10 MB; o reativo JVM atingiu pico de **7,3 GB** para o mesmo trabalho (o G1 cresce o heap alegremente quando a alocação é rápida e nenhum `-Xmx` é definido). Isso é uma **diferença de RSS de 22× para uma carga de trabalho idêntica**.
 
-You can tune both sides: bump native to G1 via `-Dquarkus.native.additional-build-args=-H:+UseG1GC` (production builds) to claw back native allocation throughput at the cost of RSS, or constrain JVM with `-Xmx256m` to flip the tradeoff the other way. The defaults reflect the deployment philosophy of each: JVM optimizes for throughput on a server, native for density on serverless/edge.
+Você pode ajustar ambos os lados: aumente o nativo para G1 via `-Dquarkus.native.additional-build-args=-H:+UseG1GC` (builds de produção) para recuperar a vazão de alocação do nativo ao custo de RSS, ou restrinja a JVM com `-Xmx256m` para inverter o trade-off no outro sentido. Os padrões refletem a filosofia de deployment de cada um: a JVM otimiza para vazão em um servidor, o nativo para densidade em serverless/edge.
 
-### Startup & idle RSS: Spring's persistent overhead
+### Startup & RSS em repouso: o overhead persistente do Spring
 
-| Framework | Startup (ms, range) | Peak RSS on `/hello` (MB) |
+| Framework | Startup (ms, faixa) | Pico RSS no `/hello` (MB) |
 |---|---:|---:|
-| Quarkus native | **13–19** | 96–102 |
+| Quarkus nativo | **13–19** | 96–102 |
 | Quarkus JVM | 577–755 | 227–296 |
-| Spring Boot JVM | 1,365–2,212 | 397–449 |
+| Spring Boot JVM | 1.365–2.212 | 397–449 |
 
-Spring Boot JVM startup is **~3× Quarkus JVM and ~110× Quarkus native**. Spring's peak RSS on `/hello` is ~1.5× Quarkus JVM and ~4× Quarkus native. For Kubernetes deployments with many replicas, or scale-to-zero serverless, these numbers compound.
+O startup do Spring Boot JVM é **~3× o do Quarkus JVM e ~110× o do Quarkus nativo**. O pico de RSS do Spring no `/hello` é ~1,5× o do Quarkus JVM e ~4× o do Quarkus nativo. Para deployments em Kubernetes com muitas réplicas, ou serverless com scale-to-zero, esses números se acumulam.
 
-### Tradeoffs summary
+### Resumo dos trade-offs
 
-| If you optimize for… | Pick |
+| Se você otimiza para… | Escolha |
 |---|---|
-| Cold-start time (FaaS, scale-to-zero) | **Quarkus native** (13–19 ms) |
-| Memory density at rest | **Quarkus reactive native** (96 MB on /hello) |
-| Memory density *under load* | **Quarkus reactive native** (332 MB even under 20 GB of allocation pressure) |
-| Short-burst throughput | **Quarkus native** (no warmup tax) |
-| Allocation-heavy workloads (parsing, transforming large payloads) | **Quarkus imperative JVM** (591 req/s on /memory) |
-| CPU-bound work | **Quarkus imperative JVM** |
-| CPU tail latency | **Quarkus reactive JVM** (dedicated pool) |
-| JVM peak throughput on lightweight endpoints | **Quarkus imperative JVM** |
-| Already on Spring, blocking is fine | **Spring MVC** |
-| Already on Spring, need true backpressure / streaming | **Spring WebFlux** |
+| Tempo de cold-start (FaaS, scale-to-zero) | **Quarkus nativo** (13–19 ms) |
+| Densidade de memória em repouso | **Quarkus reativo nativo** (96 MB no /hello) |
+| Densidade de memória *sob carga* | **Quarkus reativo nativo** (332 MB mesmo sob 20 GB de pressão de alocação) |
+| Vazão em rajada curta | **Quarkus nativo** (sem imposto de warmup) |
+| Cargas de trabalho intensivas em alocação (parsing, transformação de payloads grandes) | **Quarkus imperativo JVM** (591 req/s no /memory) |
+| Trabalho CPU-bound | **Quarkus imperativo JVM** |
+| Latência de cauda em CPU | **Quarkus reativo JVM** (pool dedicado) |
+| Pico de vazão JVM em endpoints leves | **Quarkus imperativo JVM** |
+| Já está no Spring, blocking serve | **Spring MVC** |
+| Já está no Spring, precisa de backpressure / streaming reais | **Spring WebFlux** |
 
-### Failures
+### Falhas
 
-**Zero** failed requests across all 18 runs (~315,000 total requests).
+**Zero** requisições falhas em todas as 18 execuções (~315.000 requisições no total).
 
-### Tradeoffs summary
+### Resumo dos trade-offs
 
-| If you optimise for… | Pick |
+| Se você otimiza para… | Escolha |
 |---|---|
-| Cold-start time (FaaS, scale-to-zero) | **Native** (any flavour) |
-| Memory density (many replicas, k8s) | **Native** (reactive native lowest RSS) |
-| Sustained peak throughput | **JVM** (reactive for I/O-light, either for CPU) |
-| Predictable tail latency on CPU work | **Reactive JVM** (dedicated worker pool) |
-| High-concurrency I/O fanout (>>100 VUs) | **Reactive** (this benchmark didn't exercise that range, but the architecture is the established answer) |
-| Simplicity & debuggability | **Imperative JVM** |
+| Tempo de cold-start (FaaS, scale-to-zero) | **Nativo** (qualquer variante) |
+| Densidade de memória (muitas réplicas, k8s) | **Nativo** (reativo nativo tem o menor RSS) |
+| Pico de vazão sustentado | **JVM** (reativo para I/O-leve, qualquer um para CPU) |
+| Latência de cauda previsível em trabalho de CPU | **Reativo JVM** (pool de workers dedicado) |
+| Fanout de I/O de alta concorrência (>>100 VUs) | **Reativo** (este benchmark não exercitou essa faixa, mas a arquitetura é a resposta consagrada) |
+| Simplicidade & facilidade de depuração | **Imperativo JVM** |
 
 ---
 
-## Visualising results
+## Visualizando os resultados
 
-A zero-build dashboard lives at [`benchmarks/results/index.html`](benchmarks/results/index.html) — single static HTML, Chart.js + PapaParse from CDN. It groups runs by `(app, mode)`, lets you pick a scenario, and renders bar charts for req/s, p50/p95/p99 latency, startup time, mean + peak RSS, CPU%, and avg-vs-max latency, plus an averaged data table.
+Um dashboard sem build vive em [`benchmarks/results/index.html`](benchmarks/results/index.html) — um único HTML estático, Chart.js + PapaParse via CDN. Ele agrupa as execuções por `(app, modo)`, permite escolher um cenário e renderiza gráficos de barras para req/s, latência p50/p95/p99, tempo de startup, RSS médio + pico, CPU% e latência média-vs-máxima, além de uma tabela de dados com médias.
 
-**Option 1 — just open the file** (simplest):
+![Dashboard de benchmark Quarkus vs Spring](charts.png)
 
-Double-click `benchmarks/results/index.html`, then use the **Load CSV** picker on the page to point it at `benchmarks/results/summary.csv`. Browsers block `fetch()` from `file://` for security, so auto-loading the CSV doesn't work without a server — the picker is the workaround.
+*O dashboard exibe os cartões de resumo no topo (maior vazão, melhor latência p99, startup mais rápido, menor pico de RSS) e quatro gráficos: ranking de vazão, curva de percentis de latência, dispersão de vazão vs latência p99 e startup vs pico de RSS. O seletor de cenário no canto superior direito alterna entre `hello`, `cpu` e `memory`.*
 
-**Option 2 — serve the directory** (auto-loads the CSV):
+**Opção 1 — apenas abrir o arquivo** (mais simples):
+
+Dê duplo-clique em `benchmarks/results/index.html`, depois use o seletor **Load CSV** na página para apontá-lo para `benchmarks/results/summary.csv`. Navegadores bloqueiam `fetch()` a partir de `file://` por segurança, então o carregamento automático do CSV não funciona sem um servidor — o seletor é a alternativa.
+
+**Opção 2 — servir o diretório** (carrega o CSV automaticamente):
 
 ```bash
 cd benchmarks/results && python3 -m http.server 8000
-# then open http://localhost:8000/
+# depois abra http://localhost:8000/
 ```
 
-Any static server works (`npx serve`, `caddy file-server`, etc.). The page auto-adapts when new variants appear in the CSV — no rebuild needed.
+Qualquer servidor estático funciona (`npx serve`, `caddy file-server`, etc.). A página se adapta automaticamente quando novas variantes aparecem no CSV — sem necessidade de rebuild.
 
 ---
 
-## Project layout
+## Estrutura do projeto
 
 ```
 .
-├── pom.xml                       # parent: Quarkus BOM + Spring Boot version, Java 21
-├── imperative-app/               # Quarkus blocking REST stack
-├── reactive-app/                 # Quarkus Mutiny / event-loop stack
+├── pom.xml                       # pai: BOM do Quarkus + versão do Spring Boot, Java 21
+├── imperative-app/               # stack REST blocking do Quarkus
+├── reactive-app/                 # stack Mutiny / event-loop do Quarkus
 ├── spring-mvc-app/               # Spring Boot + Spring MVC (blocking, Tomcat)
-├── spring-webflux-app/           # Spring Boot + Spring WebFlux (reactive, Netty)
+├── spring-webflux-app/           # Spring Boot + Spring WebFlux (reativo, Netty)
 ├── benchmarks/
-│   ├── scenarios/                # k6 scripts: hello.js, cpu.js, io.js
-│   ├── run-all.sh                # orchestrator
+│   ├── scenarios/                # scripts k6: hello.js, cpu.js, io.js
+│   ├── run-all.sh                # orquestrador
 │   └── results/
-│       ├── summary.csv           # aggregated final metrics
-│       └── raw/                  # per-run k6 JSON + resource CSVs + app logs
-├── CLAUDE.md                     # original requirements
-├── IMPLEMENTATION_PLAN.md        # phased build plan and decisions
-└── README.md                     # this file
+│       ├── summary.csv           # métricas finais agregadas
+│       └── raw/                  # JSON por execução do k6 + CSVs de recursos + logs das apps
+├── CLAUDE.md                     # requisitos originais
+├── IMPLEMENTATION_PLAN.md        # plano de build em fases e decisões
+└── README.md                     # este arquivo
 ```
 
 ---
 
-## Reproducing
+## Reproduzindo
 
 ```bash
 git clone <repo> && cd java-comparison
 mvn -DskipTests package
 mvn -pl imperative-app -am package -Pnative -DskipTests
 mvn -pl reactive-app  -am package -Pnative -DskipTests
-./benchmarks/run-all.sh    # ~25 minutes
+./benchmarks/run-all.sh    # ~25 minutos
 cat benchmarks/results/summary.csv
 ```
 
-Tweak load via env: `VUS=200 MEASURE=60s RUNS_PER_COMBO=5 ./benchmarks/run-all.sh`.
+Ajuste a carga via variáveis de ambiente: `VUS=200 MEASURE=60s RUNS_PER_COMBO=5 ./benchmarks/run-all.sh`.
